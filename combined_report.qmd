@@ -1,0 +1,348 @@
+---
+title: "luketesting"
+format: html
+editor: visual
+---
+
+## Libraries
+
+```{r}
+library(tidyverse)
+library(rqdatatable)
+library(visdat)
+library(ranger)
+library(sjPlot)
+```
+
+## Reading in initial data
+
+```{r}
+data = read.csv("data/life-expectancy.csv") %>% filter(Code != "")
+filtered_data = data |> ## due to no sources before then and it being a nice, round number
+  filter(Year >= 1950)
+```
+
+## Luke Joining
+
+```{r}
+ents = unique(data$Entity)
+
+## health score
+health = read.csv("data/IHME_GBD_SDI_2021_SDI_1950_2021_Y2024M05D16.csv") |>
+  select(location_name,year_id, mean_value, location_id) |>
+  filter(location_name %in% ents) |>
+  filter(!(location_id == 533)) |>
+  select(-c(location_id))
+
+
+## pollution
+pollution = read.csv("data/long-run-air-pollution.csv")
+
+## human rights
+rights = read.csv("data/distribution-human-rights-index-vdem.csv") |> select(-c(Continent))
+
+data_luke = left_join(filtered_data, health, by = join_by(Year == year_id, Entity == location_name)) |> ## general health data
+  left_join(pollution, by = join_by(Year == Year, Entity == Entity, Code)) |> ## pollution data
+  left_join(rights, by = join_by(Year == Year, Entity == Entity, Code)) ## rights data
+
+## renaming
+data_luke = rename(data_luke, meth = "Non.methane.volatile.organic.compounds..NMVOC..emissions")
+```
+
+## Jeyson Joining
+
+```{r}
+lookup = c(entity = "Entity", code = "Code", year = "Year",life_expectancy = "Period.life.expectancy.at.birth...Sex..all...Age..0")
+data_luke = rename(data_luke, all_of(lookup))
+
+gdp_data = read.csv("data/gdp.csv") %>% select(-c("X900793.annotations"))
+colnames(gdp_data) = c("entity", "code", "year", "gdp_per_capita")
+data = merge(data_luke, gdp_data, all.x = TRUE, all.y = FALSE)
+
+# Monitor Life Expectancy Growth by doing Life Expectancy in 2021 - Life Expectancy in first appearance of dataset
+growth = data %>% group_by(entity) %>% summarise(min_year = min(year), max_year = max(year), expect_grow = life_expectancy[year == max_year]-  life_expectancy[year == min_year], expect_grow_year = expect_grow / (max_year - min_year)) %>% arrange(desc(expect_grow))
+
+# The same but with Starting Year = 1950.
+growth_1950 = data %>% filter(year >= 1950, code != "") %>% group_by(entity) %>% summarise(min_year = min(year), max_year = max(year), expect_grow = life_expectancy[year == max_year]-  life_expectancy[year == min_year], expect_grow_year = expect_grow / (max_year - min_year)) %>% arrange(desc(expect_grow))
+
+# Merge population in FIRST
+# We are using "Medium" Variant: Assumes normal amount of mortality and migration during these years, and medium fertility rates.
+pop = read.csv("data/un_population.csv") %>% filter(Variant == "Medium", `Year.s.` %in% (1874:2021))
+colnames(pop) = c("entity", "year", "variant", "population") 
+pop = pop %>% select(-c("variant")) %>% mutate(entity = case_when(
+  entity == "Dem. People's Republic of Korea" ~ "North Korea", 
+  TRUE ~ entity))
+
+data = merge(data, pop, all.x = TRUE, all.y = FALSE)
+
+# Then remove population and GDP data from the other datasets
+energy = read.csv("data/owid-energy-data.csv") %>% select(-c("population", "gdp"))
+colnames(energy)[1:3] = c("entity", "year", "code")
+data = merge(data, energy, all.x = TRUE, all.y = FALSE)
+
+co2 = read.csv("data/owid-co2-data.csv") %>% filter(year >= 1874) %>% select(-c("population", "gdp"))
+colnames(co2)[1:3] = c("entity", "year", "code")
+
+data = merge(data, co2, by = c("entity", "code", "year"), all.x = TRUE, all.y = FALSE)
+
+# Load in average years of schooling
+edu = read.csv("data/schooling_years.csv")
+# Schooling Years is an average
+colnames(edu)[1:4] = c("entity", "code", "year", "schooling_years")
+edu = edu %>% select(c("entity", "code", "year", "schooling_years"))
+data = merge(data, edu, by =  c("entity", "code", "year"), all.x = TRUE, all.y = FALSE)
+
+data %>% ggplot(aes(x = schooling_years, y = life_expectancy)) + geom_point()
+```
+
+## George Joining
+
+## plotting/experimentation
+
+```{r}
+data
+
+data %>% filter(entity %in% growth_1950$entity, year >= 1950) %>% ggplot(aes(x = year, y = life_expectancy, colour = entity)) + geom_point() + geom_line()
+
+
+data %>% filter(entity %in% growth_1950$entity, year >= 1950) %>% ggplot(aes(x = year, y = gdp_per_capita, colour = entity)) + geom_point() + geom_line()
+# Large Growths from 1950 to 1960 in North and South Korea, why is this?
+korea = data %>% filter(year >= 1950, year <= 1960, entity %in% c("North Korea", "South Korea")) 
+# We don't have conclusive data for North Korea, BUT we know that Korean War occurred during 1950-1953, leading to much lower life expectancy/
+
+# Then, there were economy recovery plans by both USSR and US, which lead to a large increase in GDP.
+
+korea %>% ggplot(aes(x = year, y = gdp_per_capita, colour = entity)) + geom_line() + geom_point() + geom_line()
+
+korea %>% ggplot(aes(x = year, y = gdp_per_capita, colour = entity)) + geom_line() + geom_point() + geom_line()
+
+```
+
+## modelling - linear modelling
+
+```{r}
+## linearity assumption checking.
+data %>% ggplot(aes(x = life_expectancy, y = log(gdp_per_capita))) + geom_point() # works
+data %>% ggplot(aes(x = life_expectancy, y = mean_value)) + geom_point() # works
+data %>% ggplot(aes(x = life_expectancy, y = log(Nitrogen.oxide..NOx./population))) + geom_point() # works
+data %>% ggplot(aes(x = life_expectancy, y = Civil.liberties.index..best.estimate..aggregate..average.)) + geom_point() #kind of promising
+data %>% ggplot(aes(x = life_expectancy, y = log(Black.carbon..BC..emissions/population))) + geom_point() # not great
+data %>% ggplot(aes(x = life_expectancy, y = log(fossil_energy_per_capita))) + geom_point() # works
+data %>% ggplot(aes(x = life_expectancy, y = log(energy_per_capita.x))) + geom_point() # works
+data %>% ggplot(aes(x = life_expectancy, y = log(oil_energy_per_capita))) + geom_point() # works
+data %>% ggplot(aes(x = life_expectancy, y = log(co2_per_capita))) + geom_point() # works
+## conclusion: none of the variables appear to have an obvious non-linear trend.
+
+#shrunk_df <- data |> select(life_expectancy,gdp_per_capita,mean_value, population, #Civil.liberties.index..best.estimate..aggregate..average., fossil_energy_per_capita, co2_per_capita, #Nitrogen.oxide..NOx., energy_per_capita.x, schooling_years, year, entity)
+
+shrunk_df <- data |> select(life_expectancy,gdp_per_capita,mean_value, Civil.liberties.index..best.estimate..aggregate..average., co2_per_capita, energy_per_capita.x, year, entity)
+vis_miss(shrunk_df)
+welp = shrunk_df[complete.cases(shrunk_df),] |>
+  filter(co2_per_capita != 0)
+library(ggfortify)
+mod_1 = lm(life_expectancy ~ log(gdp_per_capita) + mean_value + Civil.liberties.index..best.estimate..aggregate..average. + log(co2_per_capita) + energy_per_capita.x, data = welp)
+autoplot(mod_1, which = 1:2)
+
+car::vif(mod_1)
+library(mplot)
+vis.art <- vis(mod_1, B = 150, redundant = TRUE, nbest = "all",seed = 2017)
+
+plot(vis.art, which = "vip")
+
+shrunk_df_forest = welp
+library(randomForest)
+
+rf_data =  welp
+
+forest_1 = ranger(life_expectancy ~ gdp_per_capita + mean_value + Civil.liberties.index..best.estimate..aggregate..average. +co2_per_capita + energy_per_capita.x, data = welp, importance = "impurity")
+
+forest_2 = ranger(life_expectancy ~ gdp_per_capita + mean_value +co2_per_capita + energy_per_capita.x, data = welp, importance = "impurity")
+
+forest_1
+
+top_10 = growth_1950 %>% head(10)
+top_10$entity
+bot_10 = growth_1950 %>% tail(10)
+bot_10$entity
+
+top_10_data = welp %>% filter(entity %in% top_10$entity)
+bot_10_data = welp %>% filter(entity %in% bot_10$entity)
+
+# Calculate MAE for both linear regression and random forest
+mae_top = sum(abs(predict(forest_1, top_10_data)$predictions - top_10_data$life_expectancy)) / nrow(top_10_data)
+
+mae_bot = sum(abs(predict(forest_1, bot_10_data)$predictions - bot_10_data$life_expectancy)) / nrow(bot_10_data)
+
+mae_top
+mae_bot
+
+mae_top_mod = sum(abs(predict(mod_1, top_10_data) - top_10_data$life_expectancy)) / nrow(top_10_data)
+
+mae_bot_mod = sum(abs(predict(mod_1, bot_10_data)- bot_10_data$life_expectancy)) / nrow(bot_10_data)
+
+mae_top_mod
+mae_bot_mod
+
+result_df = data.frame(name = c("Top 10 with RF", "Bot 10 with RF", "Top 10 with LM", "Bot 10 with LM"), mae = c(mae_top, mae_bot, mae_top_mod, mae_bot_mod))
+
+lm_importance = sjPlot::tab_model(mod_1, p.val = "kr", show.df = FALSE)
+
+forest_importance = importance(forest_1) %>% as.data.frame() %>% arrange(desc(.))
+
+colnames(forest_importance) = c("Mean Decrease Gini") 
+
+# T-test- Comparison of GDP
+```
+
+## T-Test: Global Burden of Disease Index
+
+The Global Burden of Disease index is a measurement of disease mortality and morbidity.
+
+```{r}
+top_10_med = top_10_data$mean_value
+bot_10_med = bot_10_data$mean_value
+```
+
+The Global Burden of Disease Index showed significant impacts on life expectancy in both models. To verify that this has been driving factor in causing a country to significantly grow or for them to be left behind in life expectancy growth, we now will perform a two-sample t-test with the underlying assumptions:
+
+### Assumption 1- Both Samples demonstrate a Normal Distribution
+
+```{r}
+ggplot(top_10_data, aes(sample = mean_value)) + geom_qq()+ geom_qq_line()
+ggplot(bot_10_data, aes(sample = mean_value)) + geom_qq()+ geom_qq_line()
+```
+
+Whilst the QQ-Plot demonstrates the distributions of both datasets are not normal, as points stray further from the QQ-line. We can safely apply the Central Limits Theorem to both groups as they're sample size are far greater than 30.
+
+### Assumption 2- Both Samples have Equal Variance
+
+```{r}
+sd(top_10_data$mean_value)^2
+sd(bot_10_data$mean_value)^2
+```
+
+### Assumption 3- Both Samples are independently, identically different.
+
+For the purposes of this hypothesis test, we will assume that all countries are independent from one another in terms of life expectancy.
+
+### Results
+
+```{r}
+med_test = t.test(top_10_data$mean_value, bot_10_data$mean_value)
+```
+
+Based on our results, we see that the p-value obtained is `r signif(med_test$p.value, 4)` which means at a significance level of $a = 0.05$, there is a significant difference in global disease burden index between top and bottom 10 countries. Additionally, we see that countries that have improved the most, tend to demonstrate larger improvements in their Global Disease Index.
+
+```{r}
+ggplot(data %>% filter(entity %in% top_10$entity), aes(x = year, y = mean_value)) + geom_point() + geom_line()+ ggtitle("Burden of Disease of Top 10 Countries") + ylab("Burden of Disease Mean Value") + xlab("Year") + theme_bw() + facet_wrap(~entity)
+
+ggplot(data %>% filter(entity %in% bot_10$entity, entity != "United States"), aes(x = year, y = mean_value)) + geom_point() + geom_line()+ ggtitle("Burden of Disease of Bottom 10 Countries") + ylab("Burden of Disease Mean Value") + xlab("Year") + theme_bw() + facet_wrap(~entity)
+```
+
+## T-Test: GDP per Capita
+
+```{r}
+ggplot(top_10_data, aes(sample = gdp_per_capita)) + geom_qq()+ geom_qq_line()
+ggplot(bot_10_data, aes(sample = gdp_per_capita)) + geom_qq()+ geom_qq_line()
+```
+
+Whilst the QQ-Plot demonstrates the distributions of both datasets are not normal, as points stray further from the QQ-line. We can safely apply the Central Limits Theorem to both groups as they're sample size are far greater than 30.
+
+### Assumption 2- Both Samples have Equal Variance
+
+```{r}
+sd(top_10_data$gdp_per_capita)^2
+sd(bot_10_data$gdp_per_capita)^2
+
+tops = growth_1950 %>% head(10) %>% select(c("entity", "expect_grow"))
+bots = growth_1950 %>% tail(10) %>%  select(c("entity", "expect_grow"))
+
+colnames(tops) = c("Country", "Life Expectancy Increase")
+colnames(bots) = c("Country", "Life Expectancy Increase")
+
+bots
+```
+
+We see that the variances of the top 10 and bottom countries in terms of GDP are different, meaning we will have to use a Welsh Two-Sample T-Test
+
+### Assumption 3- Both Samples are independently, identically different.
+
+For the purposes of this hypothesis test, we will assume that all countries are independent from one another in terms of life expectancy.
+
+### Results
+
+```{r}
+gdp_test = t.test(top_10_data$gdp_per_capita, bot_10_data$gdp_per_capita, var.equal = FALSE)
+
+ggplot(data %>% filter(entity %in% bot_10$entity, entity != "Nauru"), aes(x = year, y = gdp_per_capita)) + geom_point() + geom_line()+ ggtitle("GDP Per Capita of Bottom 10 Countries") + ylab("GDP per Capita") + xlab("Year") + theme_bw() + facet_wrap(~entity)
+```
+
+Based on our results, we see that the p-value obtained is `r signif(gdp_test$p.value, 4)` which means at a significance level of $a = 0.05$, there is a significant difference in gdp per capita between top and bottom 10 countries.
+
+## T-Test: Energy Per Capita
+
+```{r}
+ggplot(top_10_data, aes(sample = energy_per_capita.x)) + geom_qq()+ geom_qq_line()
+ggplot(bot_10_data, aes(sample = energy_per_capita.x)) + geom_qq()+ geom_qq_line()
+```
+
+Whilst the QQ-Plot demonstrates the distributions of both datasets are not normal, as points stray further from the QQ-line. We can safely apply the Central Limits Theorem to both groups as they're sample size are far greater than 30.
+
+### Assumption 2- Both Samples have Equal Variance
+
+```{r}
+sd(top_10_data$energy_per_capita.x)^2
+sd(bot_10_data$energy_per_capita.x)^2
+```
+
+We see that the variances of the top 10 and bottom countries in terms of GDP are different, meaning we will have to use a Welsh Two-Sample T-Test
+
+### Assumption 3- Both Samples are independently, identically different.
+
+For the purposes of this hypothesis test, we will assume that all countries are independent from one another in terms of life expectancy.
+
+### Results
+
+```{r}
+energy_test = t.test(top_10_data$energy_per_capita, bot_10_data$gdp_per_capita, var.equal = FALSE)
+ggplot(data %>% filter(entity %in% bot_10$entity), aes(x = year, y = log(energy_per_capita.x))) + geom_point() + geom_line()+ ggtitle("GDP Per Capita of Bottom 10 Countries") + ylab("Energy per Capita (Kilowatt Hours)") + xlab("Year") + theme_bw() + facet_wrap(~entity)
+
+ggplot(data %>% filter(entity %in% top_10$entity), aes(x = year, y = log(energy_per_capita.x))) + geom_point() + geom_line()+ ggtitle("GDP Per Capita of Bottom 10 Countries") + ylab("Energy per Capita (Kilowatt Hours)") + xlab("Year") + theme_bw() + facet_wrap(~entity)
+
+```
+
+Based on our results, we see that the p-value obtained is `r signif(energy_test$p.value, 4)` which means at a significance level of $a = 0.05$, there is a significant difference in energy per capita between top and bottom 10 countries.
+
+## T-Test: Log CO2 per Capita
+
+```{r}
+ggplot(top_10_data, aes(sample = log(co2_per_capita))) + geom_qq()+ geom_qq_line()
+ggplot(bot_10_data, aes(sample = log(co2_per_capita))) + geom_qq()+ geom_qq_line()
+```
+
+Whilst the QQ-Plot demonstrates the distributions of both datasets are not normal, as points stray further from the QQ-line. We can safely apply the Central Limits Theorem to both groups as they're sample size are far greater than 30.
+
+### Assumption 2- Both Samples have Equal Variance
+
+```{r}
+sd(log(top_10_data$co2_per_capita))^2
+sd(log(bot_10_data$co2_per_capita))^2
+```
+
+We see that the variances of the top 10 and bottom countries in terms of GDP are different, meaning we will have to use a Welsh Two-Sample T-Test
+
+### Assumption 3- Both Samples are independently, identically different.
+
+For the purposes of this hypothesis test, we will assume that all countries are independent from one another in terms of life expectancy.
+
+### Results
+
+```{r}
+co2_test = t.test(log(top_10_data$co2_per_capita), log(bot_10_data$co2_per_capita), var.equal = FALSE)
+
+ggplot(data %>% filter(entity %in% bot_10$entity), aes(x = year, y = co2_per_capita)) + geom_point() + geom_line()+ ggtitle("GDP Per Capita of Bottom 10 Countries") + ylab("Energy per Capita (Kilowatt Hours)") + xlab("Year") + theme_bw() + facet_wrap(~entity)
+
+ggplot(data %>% filter(entity %in% top_10$entity), aes(x = year, y = co2_per_capita)) + geom_point() + geom_line()+ ggtitle("GDP Per Capita of Bottom 10 Countries") + ylab("Energy per Capita (Kilowatt Hours)") + xlab("Year") + theme_bw() + facet_wrap(~entity)
+```
+
+Based on our results, we see that the p-value obtained is `r signif(gdp_test$p.value, 4)` which means at a significance level of $a = 0.05$, there is a significant difference in log CO2 per capita between top and bottom 10 countries.

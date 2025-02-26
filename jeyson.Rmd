@@ -1,0 +1,73 @@
+---
+title: "jeysonside"
+author: "Jeyson"
+date: "2024-07-21"
+output:
+  bookdown::html_document2:
+    fig_caption: yes
+    number_sections: yes
+    self_contained: yes
+    theme: flatly   
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    code_folding: hide
+    code_tools: true
+    global_numbering: true
+---
+```{r}
+library(tidyverse)
+library(dplyr)
+library(rqdatatable)
+```
+
+
+```{r}
+data = read.csv("data/life-expectancy.csv")
+data = data %>% filter(Year >= 1874)
+colnames(data) = c("entity", "code", "year", "life_expectancy")
+
+gdp_data = read.csv("data/gdp.csv") %>% select(-c("X900793.annotations"))
+colnames(gdp_data) = c("entity", "code", "year", "gdp_per_capita")
+data = merge(data, gdp_data, all.x = TRUE, all.y = FALSE)
+
+# Monitor Life Expectancy Growth by doing Life Expectancy in 2021 - Life Expectancy in first appearance of dataset
+growth = data %>% group_by(entity) %>% summarise(min_year = min(year), max_year = max(year), expect_grow = life_expectancy[year == max_year]-  life_expectancy[year == min_year], expect_grow_year = expect_grow / (max_year - min_year)) %>% arrange(desc(expect_grow))
+
+# The same but with Starting Year = 1950.
+growth_1950 = data %>% filter(year >= 1950) %>% group_by(entity) %>% summarise(min_year = min(year), max_year = max(year), expect_grow = life_expectancy[year == max_year]-  life_expectancy[year == min_year], expect_grow_year = expect_grow / (max_year - min_year)) %>% arrange(desc(expect_grow)) %>% head(10)
+
+# Merge population in FIRST
+# We are using "Medium" Variant: Assumes normal amount of mortality and migration during these years, and medium fertility rates.
+pop = read.csv("data/un_population.csv") %>% filter(Variant == "Medium", `Year.s.` %in% (1874:2021))
+colnames(pop) = c("entity", "year", "variant", "population") 
+pop = pop %>% select(-c("variant")) %>% mutate(entity = case_when(
+  entity == "Dem. People's Republic of Korea" ~ "North Korea", 
+  TRUE ~ entity))
+
+data = merge(data, pop, all.x = TRUE, all.y = FALSE)
+
+# Then remove population and GDP data from the other datasets
+energy = read.csv("data/owid-energy-data.csv") %>% select(-c("population", "gdp"))
+colnames(energy)[1:3] = c("entity", "year", "code")
+
+data = merge(data, energy, all.x = TRUE, all.y = FALSE)
+co2 = read.csv("data/owid-co2-data.csv") %>% filter(year >= 1874) %>% select(-c("population", "gdp"))
+colnames(co2)[1:3] = c("entity", "year", "code")
+
+data = merge(data, co2, by = c("entity", "code", "year"), all.x = TRUE, all.y = FALSE)
+
+data
+
+data %>% filter(entity %in% growth_1950$entity, year >= 1950) %>% ggplot(aes(x = year, y = life_expectancy, colour = entity)) + geom_point() + geom_line()
+
+# Large Growths from 1950 to 1960 in North and South Korea, why is this?
+korea = data %>% filter(year >= 1950, year <= 1960, entity %in% c("North Korea", "South Korea")) 
+korea
+
+korea %>% ggplot(aes(x = year, y = gdp_per_capita, colour = entity)) + geom_line() + geom_point() + geom_line() + xlim(c(1950,1960))
+
+korea %>% ggplot(aes(x = year, y = life_expectancy, colour = entity)) + geom_line() + geom_point() + geom_line() + xlim(c(1950,1960))
+
+```
+

@@ -1,0 +1,138 @@
+---
+title: "luketesting"
+format: html
+editor: visual
+---
+
+## Luke Analysis title
+
+
+```{r}
+data = read.csv("data/life-expectancy.csv")
+
+filtered_data = data |>
+  filter(Year >= 1874)
+
+data |>
+  filter(Year == 1950) |>
+  summarise(exp = mean(Period.life.expectancy.at.birth...Sex..all...Age..0))
+
+data |>
+  filter(Year == 2020) |>
+  summarise(exp = mean(Period.life.expectancy.at.birth...Sex..all...Age..0))
+```
+
+
+```{r}
+filtered_data |>
+  group_by(Year) |>
+  summarise(avgexp = mean(Period.life.expectancy.at.birth...Sex..all...Age..0)) |>
+  plot()
+```
+
+
+
+## Running Code
+
+
+
+
+## Wrangling data
+
+### poverty
+```{r}
+## might need some more work
+poverty <- read_csv("data/pip_dataset.csv") |>
+  select(country, year, headcount_ratio_international_povline, welfare_type) |>
+  group_by(country,year,welfare_type) |>
+  summarise(pov_rat = mean(headcount_ratio_international_povline)) |>
+  filter(welfare_type == "income")
+
+# income is probably the 'better' variable here. I've taken the mean of the surveys as we do not know their validity. 
+```
+
+### health
+health source: https://ghdx.healthdata.org/record/global-burden-disease-study-2021-gbd-2021-socio-demographic-index-sdi-1950%E2%80%932021
+```{r}
+ents = unique(data$Entity)
+
+health = read.csv("data/IHME_GBD_SDI_2021_SDI_1950_2021_Y2024M05D16.csv") |>
+  select(location_name,year_id, mean_value, location_id) |>
+  filter(location_name %in% ents) |>
+  filter(!(location_id == 533)) |>
+  select(-c(location_id))
+
+# From the codebook, 533 as the ID is the STATE of georgia in the US. 
+## Not entirely needed as results are the same. 
+#health |>
+#   filter(age_group_name == "All Ages", sex == "Both")
+```
+
+### cardiovascular diseases
+```{r}
+cardio = read.csv("data/cardiovascular-disease-death-rate-who-mdb.csv")
+cardio
+```
+
+### pollution
+```{r}
+pollution = read.csv("data/long-run-air-pollution.csv")
+pollution
+```
+
+## sanitation
+```{r}
+sanit = read.csv("data/share-without-improved-sanitation.csv")
+```
+
+## rights
+```{r}
+rights = read.csv("data/distribution-human-rights-index-vdem.csv") |> select(-c(Continent))
+```
+
+## poverty/inequality
+```{r}
+pov2 <- read.csv("data/use-of-interpolation-and-extrapolation-on-maddison-gdp-per-capita-data.csv") |>
+  filter(Year >= 1950, GDP.per.capita_source != "", Entity %in% ents)
+```
+
+
+## Joining data
+```{r}
+filtered_data
+x = #left_join(filtered_data, cardio, by = join_by(Year == Year, Entity == Entity, Code)) |> ## heart data
+  left_join(health, by = join_by(Year == year_id, Entity == location_name)) |> ## general health data
+  #left_join(poverty, by = join_by(Year == year, Entity == country)) |> ## poverty data, too much missing
+  left_join(pollution, by = join_by(Year == Year, Entity == Entity, Code)) |> ## pollution data
+  #left_join(sanit, by = join_by(Year == Year, Entity == Entity, Code)) |>  ## sanitation data
+  left_join(rights, by = join_by(Year == Year, Entity == Entity, Code)) ## rights data
+  #left_join(pov2, by = join_by(Year == Year, Entity == Entity, Code)) ## poverty/gini data, not used as too much is missing.
+
+lookup <- c(card = "Age.standardized.deaths.that.are.from.cardiovascular.diseases.per.100.000.people..in.both.sexes.aged.all.ages",
+            #san = "Share.of.the.population.not.using.improved.sanitation.facilities",
+            meth = "Non.methane.volatile.organic.compounds..NMVOC..emissions")
+x <- rename(x, all_of(lookup))
+vis_miss(x)
+```
+
+## Look at this!
+```{r}
+x = left_join(filtered_data, health, by = join_by(Year == year_id, Entity == location_name)) |> ## general health data
+  #left_join(poverty, by = join_by(Year == year, Entity == country)) |> ## poverty data, too much missing
+  left_join(pollution, by = join_by(Year == Year, Entity == Entity, Code)) |> ## pollution data
+  #left_join(sanit, by = join_by(Year == Year, Entity == Entity, Code)) |>  ## sanitation data
+  left_join(rights, by = join_by(Year == Year, Entity == Entity, Code)) ## rights data
+  #left_join(pov2, by = join_by(Year == Year, Entity == Entity, Code)) ## poverty/gini data, not used as too much is missing.
+
+lookup <- c(meth = "Non.methane.volatile.organic.compounds..NMVOC..emissions")
+x <- rename(x, all_of(lookup))
+vis_miss(x)
+```
+
+
+
+
+
+
+
+

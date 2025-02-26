@@ -1,0 +1,353 @@
+---
+title: "One Factor to Rule them All"
+subtitle: "A report on life expectancy gains within recent history"
+title-block-banner: true
+date: "`r Sys.Date()`"
+author: "520455623 (Jey Son Chuah), 520466537 (Luke Brutto), 500497375 (George Wu)"
+format: 
+  html: 
+    embed-resources: true # Creates a single HTML file as output
+    code-fold: true # Code folding; allows you to show/hide code chunks
+    code-tools: true # Includes a menu to download the code file 
+    # code-tools are particularly important if you use inline R to 
+    # improve the reproducibility of your report
+    theme: minty
+table-of-contents: true # (Optional) Creates a table of contents
+number-sections: true # (Optional) Puts numbers next to heading/subheadings
+bibliography: references2024win.bib
+# YAML inspired by the work of Garth Tarr
+---
+```{r}
+# Load in the statistical test data for the abstract
+load("data/tests.RData")
+```
+
+## Abstract
+
+In recent history, the world has seen massive change in technology, quality of life, education and healthcare - factors potentially related to a large increase in the life expectancy of humans. This report aims to explore if these factors are related to gains in life expectancy globally since 1950. 
+
+By gathering additional external data sets containing socioeconomic, health and environmental factors, we were able to use Linear and Random Forest Modelling techniques to determine the most impactful factors on life expectancy. Our investigation from both models revealed that the Social Development Index (SDI), Energy (In Kilowatt Hours) Per Capita and GDP per Capita most significantly impacted the life expectancy of nations. $CO_2$ emissions did not meaningfully enhance the performance of both Linear and Random Forest models. Whilst the Human Rights Index (HRI) demonstrated linear importance in determining life expectancy, it proved to be not particularly useful in a non-linear setting.
+
+The investigation continued through a specific analysis of SDI, Energy per Capita, and GDP per Capita for the top and bottom 10 countries in terms of life expectancy growth since the 1950s. Various t-tests were performed on these factors. Whilst in certain cases increases in these factors did not lead to a noticeable increase in life expectancy, results showed significant differences on average when comparing the Top and Bottom 10 growing countries in terms of life expectancy growth. Our results demonstrated significant p-values of `r signif(med_test$p.value, 4)`, `r signif(energy_test$p.value, 4)` and `r signif(gdp_test$p.value, 4)` respectively.
+
+Overall, this report outlines the significance of technological, socio-economic and healthcare factors in increasing average lifespans, and hence provides direction for future policy and strategies in decision making. 
+
+##  Project background and datasets selected
+This report aims to investigate what factors are most strongly associated with gains in life expectancy for humanity, both in general and a close-up analysis of the top/bottom 10 nations. The data sets we've chosen aim to reflect this, and hence represent a variety of potential factors:
+
+1. Socio-Demographic Index (SDI) [@sdi]. This aims to describe the level of development relevant to health (fertility, education and income-based measures included) in a given nation at a given time. A score of 1 implies that a nation has the theoretical highest level of development as it would apply to health, and vice-versa for a score of 0.
+
+2. Human rights index (HRI) [@hri], aiming to capture the rights that citizens have in particular nations at given times. A higher score indicates that more rights are regularly enforced for the citizens living in that entity.
+
+3. $CO_2$ emissions data [@co2data], in an attempt to see if this general measure of pollution has an impact on lifespan due to both positive (cheap energy) and negative (respiratory diseases) effects. In all analysis, a per-capita measure is employed to allow comparability between entities.
+
+4. Energy production [@nrgdata], which should inform how effective a nation at a given time is at generating power to perhaps fuel longer lifespans (e.g. enhanced agricultural methods for feeding people, more advanced technologies). Energy production, like $CO_2$ emissions, is represented here as a per-capita measure to allow comparability between entities.
+
+5. Gross domestic product [@gdpdata], an economic measure for how economically prosperous a nation is at a given point in time, and hence could assist funding greater healthcare facilities. Technically, it is defined as the total value of goods and services provided within an entity during a period of one year. It too is formulated as a per-capita measure to allow comparability between entities.
+
+###  Computational Healthcare: Importing and Cleaning Data + Charting Acknowledgements
+Any form of data cleaning, charting and arithmetic used in this report was through the use of RStudio [@RSTUDIO], specifically in a quarto document [@Allaire_Quarto_2022]. Most data cleaning and output were completed in base R and the tidyverse [@tidyverse]. 
+
+The cleaning itself mainly involved the shortening of names of variables and merging data frames together, though in some cases nonsense entries were removed. In order to maintain most entries from external datasets, our investigation only used data from 1950 onwards, this also helps remove null values for the purposese of modelling. For other forms of analysis (e.g. t-tests) null values removed on a test-by-test basis. As data sets were obtained by different people, code was also included to bridge the merges. 
+
+Some plots in later sections of this report were created with the use of ggpubr [@ggpubr], and pieced together using patchwork [@patchwork]. Kable extra [@kableextra] was also used to format tables to be neater.
+
+```{r message=FALSE, warning=FALSE, suppressMessages= TRUE}
+library(tidyverse)
+library(kableExtra)
+library(patchwork)
+## Load in challenge data
+comp_data = read.csv("data/life-expectancy.csv")
+
+### Data - Luke
+## Socio-Demographic Index - Luke
+#The name 'Georgia' was allocated to both the country Georgia and the state of Georgia in the USA. We have removed the state (id of 533) to avoid joining issues.
+health = read.csv("data/IHME_GBD_SDI_2021_SDI_1950_2021_Y2024M05D16.csv") |>
+  select(location_name,year_id, mean_value, location_id) |>
+  filter(!(location_id == 533)) |> 
+  rename(sdi = "mean_value") |>
+  select(-c(location_id))
+
+## Human rights index - Luke
+rights = read.csv("data/distribution-human-rights-index-vdem.csv") |> 
+  select(-c(Continent)) |>
+  rename(hri = "Civil.liberties.index..best.estimate..aggregate..average.")
+
+data_luke = left_join(comp_data, health, by = join_by(Year == year_id, Entity == location_name)) |> ## general health data
+  left_join(rights, by = join_by(Year == Year, Entity == Entity, Code)) ## rights data
+
+## Matching Jey Son's naming
+lookup = c(entity = "Entity", code = "Code", year = "Year",life_expectancy = "Period.life.expectancy.at.birth...Sex..all...Age..0")
+data_luke = rename(data_luke, all_of(lookup))
+
+### Data - Jey Son
+## GDP - Jey Son
+gdp_data = read.csv("data/gdp.csv") %>% select(-c("X900793.annotations"))
+colnames(gdp_data) = c("entity", "code", "year", "gdp_per_capita")
+data = merge(data_luke, gdp_data, all.x = TRUE, all.y = FALSE)
+
+## Energy - Jey Son
+energy= read.csv("data/owid-energy-data.csv") %>% select(-c("population", "gdp"))
+colnames(energy)[1:3] = c("entity", "year", "code")
+data = merge(data, energy, all.x = TRUE, all.y = FALSE)
+
+## Carbon Dioxide - Jey Son
+co2 = read.csv("data/owid-co2-data.csv") %>% filter(year >= 1874) %>% select(-c("population", "gdp","energy_per_capita"))
+colnames(co2)[1:3] = c("entity", "year", "code")
+data = merge(data, co2, by = c("entity", "code", "year"), all.x = TRUE, all.y = FALSE)
+
+
+selected_data = data |>
+  select(life_expectancy, sdi, hri, co2_per_capita, energy_per_capita, gdp_per_capita, year, entity) |>
+  na.omit() |>
+  filter(co2_per_capita != 0) # there's a single observation where this is the case.
+```
+
+
+## What is the most important factor overall?
+
+
+### Methods
+To determine the most important factor overall, we have decided to model life expectancy on our variables of choice. Modelling methods chosen include linear and non-linear methods as to capture most of the variation in the data.
+
+#### Linear Modelling
+Logarithmic transformations of variables pertaining to gdp per capita and $CO_2$ per capita were undertaken as to best meet the assumptions of linear modelling. The ggfortify package [@ggfor1;@ggfor2] was utilised to check assumptions graphically. In addition to this, other forms of validity were analysed. The MASS package [@mass] was incorperated to utilise stepwise model creation.
+
+Stability was checked using the mplot package [@mplot] and potential multicolinearity was checked using the car package's vif function [@car].
+
+```{r linear modelling methods, echo = FALSE, message=FALSE, warning = FALSE}
+library(ggfortify)
+library(car)
+mod_1 = lm(life_expectancy ~ log(gdp_per_capita) + sdi + hri + log(co2_per_capita) + energy_per_capita, data = selected_data)
+step_mod = MASS::stepAIC(mod_1, trace = F, direction= "both")
+```
+
+#### Random Forest
+As opposed to linear methods, a random forest (implemented using the 'randomForest' package [@rf]) was incorporated to allow for the detection of non-linear variation. All previous transformations have been removed. Here, the importance of the random forest is determined by the %IncMSE value. Larger observed values of %IncMSE indicate higher importance [@rfppl].
+
+```{r random forest methods, echo=FALSE, message=FALSE, warning = FALSE}
+set.seed(2024) # Needed as this is a random process!
+## Random Forest Modelling
+library(randomForest)
+forest_1 = randomForest(life_expectancy ~ gdp_per_capita + sdi + hri + co2_per_capita + energy_per_capita, data = selected_data, importance = TRUE)
+
+holder = data.frame(forest_1$importance) |>
+  dplyr::select(X.IncMSE) |>
+  arrange(desc(X.IncMSE))
+```
+
+
+### Results and Discussion
+For the linear model, @fig-linear-vipplot shows how the model selection changes as the penalty for larger models is increased. The $R^2$ value for the model selected is `r round(summary(mod_1)$r.squared,3)`, and the stepwise model showed the same results as the full model that started the section.
+
+```{r, warning = FALSE}
+#| label: fig-linear-vipplot
+#| fig-cap: "Variable importance plot showing factors influencing Life Expectancy."
+library(mplot)
+mod_1_sim <- vis(mod_1, B = 150, redundant = TRUE, nbest = "all",seed = 2024)
+
+plot(mod_1_sim, which = "vip")
+
+#identical(mod_1$model, step_mod$model)
+#> TRUE
+```
+
+For the random forest model, @tbl-importance_rf shows to what extent the different variables are important to the model.
+
+```{r}
+#| label: tbl-importance_rf
+#| tbl-cap: "Variable importance for random forest model."
+
+holder |>
+  round(2) |>
+  kable(col.names = c("Variable","%IncMSE"))
+
+```
+
+
+The results of the modelling analysis show a few main insights.
+
+**$CO_2$ per capita - Not a game changer!**
+
+Both @fig-linear-vipplot and @tbl-importance_rf demonstrate that $CO_2$ per capita was the least important variable in explaining life expectancy. This is because it scored low in both the linear model's bootstrapped probability AND the random forest's %IncMSE, indicating that models were not signficantly enhanced by the inclusion of this variable. 
+
+In fact, the argument can be made that the inclusion of this variable lowers the overall model stability. This is because all other variables included cling to the top of @fig-linear-vipplot, indicating that despite penalty increases and bootstrapping, they were still worthy indicators, in stark contrast to $CO_2$ per capita. 
+
+**Human Rights Index - linear or bust**
+
+There is a striking difference in the selection rate of the Human Rights Index variable in @fig-linear-vipplot, where it is selected most of the time, and @tbl-importance_rf, where it contains a score below that of $CO_2$ per capita. This confusing result suggests that there is some non-linear importance to the other variables that the Human Rights Index does not have. Hence, we cannot conclude it is the most important out of the three variables in the context of finding associations in general.
+
+**Champions of overall explanatory power**
+
+Given the limitations of the other two variables previously mentioned, it appears that the three 'best' variables are the SDI, energy production per capita and gdp per capita. Given the large difference in non-linear importance (~20%IncMSE) between SDI and the other variables, it appears that the gains in fertility, education and income it represents are crucial to developments in life expectancy.
+
+
+It seems that the findings regarding these variables agree with previous analysis. For example, it has been recently claimed that an increase in the years of education that one experiences results in an increase in their life expectancy, going so far as to claim "not attending school at any point was as bad for adult health as consuming five or more alcoholic drinks every day or smoking 10 cigarettes each day for a decade" [@edubenefits], though noted that this association was likely due to other variables such as income. Furthermore, in the context of gdp per capita, studies show that economic development is strongly related to gains in life expectancy [@Miladinov2020], perhaps due to the increased development of medical technology, healthier standards of living and access to higher quality medication. Lastly, the use of energy is also clearly related to life expectancy through both temperature control aspects (cold or hot homes are associated with disease) as well as refrigeration improving the longevity of food, hence making for a higher quality diet [@nrgbenefits]. 
+
+**Limitations of modelling** 
+
+Despite the seemingly conclusive evidence, there are various limitations that the modelling analysis was subject to.
+
+The first of these is a multicolinearity issue, due the finding that the log(gdp_per_capita) variable in the linear model had a variance inflation factor (VIF) of over 10. Whilst not a problem for prediction, it renders this study unable to interpret coefficients, and hence try to determine importance in a linear sense in this way. 
+
+Furthermore, despite the fact that there were many observations for the modelling analysis, the only complete data used ranged from 1965 to 2021 after cleaning. In addition, it was found that there was an over representation of entities with higher life expectancies in the earlier years (before 1980), presumably as their technology was advanced enough (perhaps benefitting from increased GDP per capita and education) to track these statistics from earlier on. 
+
+Lastly, whilst there was no major concerns with the residual vs fitted plot (points seemed mostly random), the normality plot of the residuals indicated systematic departure from the 45 degree line. However, given the high observation count (`r nrow(selected_data)`) it was deemed that the central limit theorem allows us to make at least approximately valid claims regarding the model.
+
+ 
+## Top vs Bottom - What's the difference?
+
+To further engage with the life expectancy data, we have elected to showcase the top and bottom 10 of the data set in the context of 'expectancy growth', a term we use to mean the change in life expectancy from 1950 to the latest year the nation is recorded in the data set.
+
+```{r}
+#| label: fig-top-expect
+#| fig-cap: "Scatterplot depicting Top 10 (Red) vs Bottom 10 (Blue) growing nations in terms of life expectancy."
+
+# Change UAE Name:
+data = data %>% mutate(entity = case_when(
+  entity == "United Arab Emirates" ~ "U.A.E",
+  TRUE ~ entity))
+
+# Monitor Life Expectancy Growth by doing Life Expectancy in 2021 - Life Expectancy in first appearance of dataset
+growth = data %>% group_by(entity) %>% summarise(min_year = min(year), max_year = max(year), expect_grow = life_expectancy[year == max_year]-  life_expectancy[year == min_year], expect_grow_year = expect_grow / (max_year - min_year)) %>% arrange(desc(expect_grow))
+
+# The same but with Starting Year = 1950.
+growth_1950 = data %>% filter(year >= 1950) %>% group_by(entity) %>% summarise(min_year = min(year), max_year = max(year), expect_grow = life_expectancy[year == max_year]-  life_expectancy[year == min_year], expect_grow_year = expect_grow / (max_year - min_year)) %>% arrange(desc(expect_grow))
+
+# Get the top and bottom 10s
+top_10 = growth_1950 %>% head(10)
+bot_10 = growth_1950 %>% tail(10)
+
+t10 = data %>% filter(year >= 1950, code != "", entity %in% top_10$entity) %>% mutate(flag = "Top 10")
+b10 = data %>% filter(year >= 1950, code != "", entity %in% bot_10$entity) %>% mutate(flag = "Bottom 10")
+
+# Give a plot showing the growth of life expectancy of top 10 and bottom 10
+
+p0.1 = ggplot(t10, aes(x = year, y = life_expectancy)) + geom_point(colour = "#F8766D") + geom_line() + theme_minimal() + ylab("Life Expectancy") + xlab("Year") + ggtitle("Life Expectancy of Top 10") + facet_wrap(~entity) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.position = "none")
+p0.2 = ggplot(b10, aes(x = year, y = life_expectancy)) + geom_point(colour = "#00BFC4") + geom_line() + theme_minimal() + ylab("Life Expectancy") + xlab("Year") + ggtitle("Life Expectancy of Bottom 10") + facet_wrap(~entity) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.position = "none" )
+
+p0.1 + p0.2
+```
+
+As seen in @fig-top-expect, Top 10 nations demonstrate a mix of spontaneous bursts of growth during the initial years and smooth growth over a long period, they have grown the most due to having a low starting average life expectancy. In contrast, the bottom 10 growth demonstrated slow steady growth, with a high starting average life expectancy, with some nations such as Lesotho and Zimbabwe experience large decreases in life expectancy.
+
+Now that the top and bottom 10 nations are calculated, we will engage t-tests to see what variables are significantly different between the two sets of entities from those previously deemed significant, and draw insights into life expectancy from here.
+
+Note that, in all tests, we set $\alpha = 0.05$.
+
+### T-Test: Socio-Demographic Index 
+#### Assumption Checking
+
+```{r}
+#| label: fig-sdi-qqplot
+#| fig-cap: "QQ-Plot and Boxplot demonstrating Normality and Variance of data for SDI"
+
+top_10_data = selected_data %>% filter(entity %in% top_10$entity)
+bot_10_data = selected_data %>% filter(entity %in% bot_10$entity)
+
+top_10_data_mod = top_10_data |> mutate(flag = "Top 10")
+bot_10_data_mod = bot_10_data |> mutate(flag = "Bottom 10")
+comb_10_data = rbind(top_10_data_mod, bot_10_data_mod)
+
+library(ggpubr)
+plot1_1 = ggboxplot(comb_10_data, x = "flag", y = "sdi", color = "flag", add = "jitter") + labs(y = "SDI", x = "Rank", colour = "Rank")
+
+plot1_2 = ggqqplot(comb_10_data, x = "sdi", facet.by = "flag")
+
+plot1_1 + plot1_2 + plot_annotation('Assumption Checking: Rank vs SDI')
+
+```
+
+Whilst the QQ-Plot in @fig-sdi-qqplot demonstrates the distributions of both data sets are not normal, as points near both ends for both plots stray far from the QQ-line. We can safely apply the Central Limits Theorem to both groups as they're sample size are far greater than 30. In addition, the boxplot indicates that the samples have relatively equal variance. For the purposes of this hypothesis test, we will assume that all nations are independent from one another in terms of life expectancy.
+
+We hence progress forward with the test.
+
+#### Results
+```{r}
+med_test = t.test(top_10_data$sdi, bot_10_data$sdi, var.equal = TRUE)
+```
+
+Based on our results, we see that the p-value obtained is `r signif(med_test$p.value, 4)` which means at a significance level of $\alpha = 0.05$, there is a significant difference in Socio-Demographic Index between top and bottom 10 nations. Additionally in @fig-sdi, we see that nations that have improved the most tend to demonstrate larger improvements in their Socio-Demographic Index. This helps explain the increase in life expectancy, as it indicates mortality rates due to diseases in these nations have severely decreased since the 1950s.
+
+```{r warning = FALSE}
+#| label: fig-sdi
+#| fig-cap: "Scatterplot depicting Top 10 (Red) vs Bottom 10 (Blue) in terms of SDI."
+
+p1 = ggplot(data %>% filter(year >= 1950, code != "", entity %in% top_10$entity), aes(x = year, y = sdi)) + geom_point(colour = "#F8766D") + geom_line()+ ggtitle("SDI of Top 10 nations") + ylab("SDI") + xlab("Year") + theme_minimal() + facet_wrap(~entity) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+p2 = ggplot(data %>% filter(year >= 1950, code != "", entity %in% bot_10$entity, entity != "United States"), aes(x = year, y = sdi)) + geom_point(colour = "#00BFC4") + geom_line()+ ggtitle("SDI of Bottom 10 nations") + ylab("SDI") + xlab("Year") + theme_minimal() + facet_wrap(~entity) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+p1 + p2
+```
+
+
+### T-Test: GDP per Capita
+```{r}
+#| label: fig-gdp-qqplot
+#| fig-cap: "QQ-Plot and Boxplot demonstrating Normality and Variance of data for GDP per Capita"
+
+plot2_1 = ggboxplot(comb_10_data, x = "flag", y = "gdp_per_capita", color = "flag", add = "jitter") + labs(y = "GDP Per Capita", x = "Rank", colour = "Rank")
+
+plot2_2 = ggqqplot(comb_10_data, x = "gdp_per_capita", facet.by = "flag")
+
+plot2_1 + plot2_2 + plot_annotation('Assumption Checking: Rank vs GDP Per Capita')
+```
+
+Whilst the QQ-Plot in @fig-gdp-qqplot demonstrates the distributions of both datasets are not normal, as points stray further from the QQ-line. We can safely apply the Central Limits Theorem to both groups as they're sample size are far greater than 30. In addition, the boxplot shows that the variances of the top 10 and bottom nations in terms of GDP are different, meaning we will have to use a Welsh Two-Sample T-Test. As with the previous test, we will assume that all nations are independent from one another in terms of life expectancy. 
+
+#### Results
+
+```{r warning = F}
+#| label: fig-gdp
+#| fig-cap: "Scatterplot depicting Top 10 (Red) vs Bottom 10 (Blue) in terms of GDP per Capita Growth"
+
+gdp_test = t.test(top_10_data$gdp_per_capita, bot_10_data$gdp_per_capita, var.equal = FALSE)
+
+p_1_1 = ggplot(data %>% filter(year >= 1950, code != "", entity %in% top_10$entity, entity != "Nauru"), aes(x = year, y = gdp_per_capita)) + geom_point(colour = "#F8766D") + geom_line() + ylab("GDP per Capita") + xlab("Year") + theme_minimal() + facet_wrap(~entity) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+p_1_2 = ggplot(data %>% filter(year >= 1950, code != "", entity %in% bot_10$entity), aes(x = year, y = gdp_per_capita)) + geom_point(colour = "#00BFC4") + geom_line() + ylab("GDP per Capita") + xlab("Year") + theme_minimal() + facet_wrap(~entity) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+p_1_1 + p_1_2 + plot_annotation("GDP Per Capita of Top and Bottom 10 nations")
+```
+
+Based on our results, we see that the p-value obtained is `r signif(gdp_test$p.value, 4)` which means at a significance level of $\alpha= 0.05$, there is a significant difference in gdp per capita between top and bottom 10 nations. However, given that data is missing, we cannot be conclusive with this result.
+
+From @fig-gdp, we can see that whilst there is a significant difference in GDP of the Top and Bottom nations, there isn't a direct correlation between GDP and life expectancy. This demonstrates that life expectancy is affected by a combination of various factors and the multicolinearity of data as discussed previously.
+
+### T-Test: Energy Per Capita
+
+```{r}
+#| label: fig-energy-qqplot
+#| fig-cap: "QQ-Plot and Boxplot demonstrating Normality and Variance of data for Energy (Kilowatt Hours) per Capita"
+
+plot3_1 = ggboxplot(comb_10_data, x = "flag", y = "energy_per_capita", color = "flag", add = "jitter") + labs(y = "Energy Per Capita", x = "Rank", colour = "Rank")
+
+plot3_2 = ggqqplot(comb_10_data, x = "energy_per_capita", facet.by = "flag")
+
+plot3_1 + plot3_2 + plot_annotation('Assumption Checking: Rank vs Energy Per Capita')
+```
+
+Whilst the QQ-Plot in @fig-energy-qqplot demonstrates the distributions of both datasets are not normal, as points stray further from the QQ-line. We can safely apply the Central Limits Theorem to both groups as they're sample size are far greater than 30. From the box plot, we see that the variances of the top 10 and bottom nations in terms of GDP are different, meaning we will have to use a Welch Two-Sample T-Test. For the final time, for the purposes of this hypothesis test, we will assume that all nations are independent from one another in terms of life expectancy.
+
+#### Results
+
+```{r warning = F}
+#| label: fig-energy
+#| fig-cap: "Scatterplot depicting Top 10 (Red) vs Bottom 10 (Blue) in terms of Energy (Kilowatt Hours) per Capita."
+
+energy_test = t.test(top_10_data$energy_per_capita, bot_10_data$gdp_per_capita, var.equal = FALSE)
+
+p_2_1 = ggplot(data %>% filter(year >= 1950, code != "", entity %in% top_10$entity), aes(x = year, y = log(energy_per_capita))) + geom_point(colour = "#F8766D") + geom_line() + ylab("Energy per Capita (Kilowatt Hours)") + xlab("Year") + theme_minimal() + facet_wrap(~entity) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+p_2_2 = ggplot(data %>% filter(year >= 1950, code != "", entity %in% bot_10$entity), aes(x = year, y = log(energy_per_capita))) + geom_point(colour = "#00BFC4") + geom_line() + ylab("Energy per Capita (Kilowatt Hours)") + xlab("Year") + theme_minimal() + facet_wrap(~entity) + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+p_2_1 + p_2_2 + plot_annotation("Energy Per Capita of Top and Bottom 10 nations")
+
+# Saving all the RData of statistical tests
+save(med_test, energy_test, gdp_test, file = "data/tests.RData")
+```
+
+Based on our results, we see that the p-value obtained is `r signif(energy_test$p.value, 4)` which means at a significance level of $\alpha= 0.05$, there is a significant difference in energy per capita between top and bottom 10 nations. However, given that data is missing, we cannot be conclusive with this result.
+
+In @fig-energy, we see that there is a general pattern of large periods of growth of energy per capita in the top nation (Except North Korea), whilst bottom nation generally demonstrate stagnant growth in Energy per Capita. This demonstrates that there is possible correlation between Energy per Capita and Life Expectancy, with the energy output of a nation acting as an alternative measure to economic gains. 
+

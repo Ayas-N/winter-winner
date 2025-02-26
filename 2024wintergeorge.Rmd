@@ -1,0 +1,116 @@
+---
+title: "2024 Winter Data Analysis"
+author: "George Wu"
+date: "2024-07-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+```
+
+```{r}
+data = read.csv("life-expectancy.csv")
+```
+
+```{r}
+head(data)
+```
+
+```{r}
+data = data %>% filter(Year > 1874)
+```
+
+```{r}
+uhc_data = read.csv("API_SH.UHC.SRVS.CV.XD_DS2_en_csv_v2_1048946/API_SH.UHC.SRVS.CV.XD_DS2_en_csv_v2_1048946.csv")
+```
+
+```{r}
+uhc_data
+```
+
+```{r}
+uhc_data <- Filter(function(x)!all(is.na(x)), uhc_data)
+```
+
+
+```{r}
+uhc_data <- na.omit(uhc_data)
+```
+
+```{r}
+#rename year columns
+oldnames = c("Country.Name", "Country.Code", "X2000", "X2005", "X2010", "X2015", "X2017", "X2019", "X2021")
+newnames = c("Entity", "Code", "2000", "2005", "2010", "2015", "2017", "2019", "2021")
+
+uhc_data = uhc_data %>% rename_at(vars(oldnames), ~ newnames)
+```
+
+```{r}
+keep <- c("Entity", "Code", "2000", "2005", "2010", "2015", "2017", "2019", "2021")
+uhc_data <- uhc_data[keep]
+uhc_data <- uhc_data %>% 
+  rowwise() %>%
+  mutate(Average.UHC.Coverage = mean(c_across("2000":"2021"))) %>%
+  ungroup()
+```
+
+```{r}
+uhc_data
+```
+
+```{r}
+top15_uhc <- uhc_data %>%
+  filter(rank(desc(Average.UHC.Coverage)) <= 15)
+```
+
+```{r}
+top15_uhc
+```
+
+```{r}
+library(ggplot2)
+library(reshape2)
+library(tidyr)
+filtered_uhc_tall <- pivot_longer(top15_uhc, cols = starts_with("20"))
+```
+
+```{r}
+ggplot(filtered_uhc_tall, aes(name, value, group = Entity)) + 
+  geom_line(aes(color = Entity)) + 
+  geom_point(aes(color = Entity))
+```
+
+```{r}
+filtered_data <- data[data$Year == c("2000", "2005", "2010", "2015", "2017", "2019", "2021"),]
+filtered_data <- filtered_data[!(filtered_data$Code == ""),]
+filtered_data
+```
+
+```{r}
+merged_data <- merge(x = filtered_data, y = filtered_uhc_tall, by = "Code", all.y = TRUE)
+merged_data <- na.omit(merged_data)
+merged_data <- subset(merged_data, Year == name)
+```
+
+```{r}
+keep <- c("Code", "Country", "Year", "Period.life.expectancy.at.birth...Sex..all...Age..0", "Average.UHC.Coverage", "Coverage Score")
+names(merged_data)[names(merged_data) == "Entity.x"] <- "Country"
+names(merged_data)[names(merged_data) == "value"] <- "Coverage Score"
+merged_data <- merged_data[keep]
+```
+
+```{r}
+merged_data <- pivot_longer(merged_data, cols = c("Period.life.expectancy.at.birth...Sex..all...Age..0", "Average.UHC.Coverage"), names_to = 'variable', values_to = "value")
+```
+
+```{r}
+ggplot(merged_data, aes(x = Country, y = value, fill = variable)) + 
+  geom_bar(stat = "identity", position = "dodge") + 
+  facet_wrap(~Year)
+```
